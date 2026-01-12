@@ -183,7 +183,8 @@ class EdelFinance:
 
         self.PURCHASE_PRICE = 10
 
-        self.HEADERS = {}
+        self.HEADERS_1 = {}
+        self.HEADERS_2 = {}
         self.proxies = []
         self.proxy_index = 0
         self.account_proxies = {}
@@ -767,13 +768,17 @@ class EdelFinance:
 
         return option, proxy_choice, rotate_proxy
     
+    async def ensure_ok(self, response):
+        if not response.ok:
+            raise Exception(f"HTTP {response.status}:{await response.text()}")
+    
     async def check_connection(self, address: str, use_proxy: bool):
         proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
         connector, proxy, proxy_auth = self.build_proxy_config(proxy_url)
         try:
             async with ClientSession(connector=connector, timeout=ClientTimeout(total=30)) as session:
                 async with session.get(url="https://api.ipify.org?format=json", proxy=proxy, proxy_auth=proxy_auth) as response:
-                    response.raise_for_status()
+                    await self.ensure_ok(response)
                     return True
         except (Exception, ClientResponseError) as e:
             self.log(
@@ -788,13 +793,11 @@ class EdelFinance:
     async def siwe_init(self, address: str, use_proxy: bool, retries=5):
         url = f"{self.API_1}/siwe/init"
         data = json.dumps({"address": address})
-        headers = {**self.HEADERS[address]}
-        headers["Accept"] = "application/json"
-        headers["Content-Length"] = str(len(data))
-        headers["Content-Type"] = "application/json"
-        headers["Privy-App-Id"] = "cmf5gt8yi019ljv0bn5k8xrdw"
-        headers["Privy-Ca-Id"] = self.ca_id[address]
-        headers["Privy-Client"] = "react-auth:3.0.1"
+        headers = {
+            **self.HEADERS_1[address],
+            "Content-Length": str(len(data)),
+            "Content-Type": "application/json"
+        }
         await asyncio.sleep(random.uniform(0.5, 1.0))
         for attempt in range(retries):
             proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
@@ -802,7 +805,7 @@ class EdelFinance:
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
                     async with session.post(url=url, headers=headers, data=data, proxy=proxy, proxy_auth=proxy_auth) as response:
-                        response.raise_for_status()
+                        await self.ensure_ok(response)
                         return await response.json()
             except (Exception, ClientResponseError) as e:
                 if attempt < retries - 1:
@@ -820,13 +823,11 @@ class EdelFinance:
     async def siwe_authenticate(self, account: str, address: str, nonce: str, use_proxy: bool, retries=5):
         url = f"{self.API_1}/siwe/authenticate"
         data = json.dumps(self.generate_login_payload(account, address, nonce))
-        headers = {**self.HEADERS[address]}
-        headers["Accept"] = "application/json"
-        headers["Content-Length"] = str(len(data))
-        headers["Content-Type"] = "application/json"
-        headers["Privy-App-Id"] = "cmf5gt8yi019ljv0bn5k8xrdw"
-        headers["Privy-Ca-Id"] = self.ca_id[address]
-        headers["Privy-Client"] = "react-auth:3.0.1"
+        headers = {
+            **self.HEADERS_1[address],
+            "Content-Length": str(len(data)),
+            "Content-Type": "application/json"
+        }
         await asyncio.sleep(random.uniform(0.5, 1.0))
         for attempt in range(retries):
             proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
@@ -834,7 +835,7 @@ class EdelFinance:
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
                     async with session.post(url=url, headers=headers, data=data, proxy=proxy, proxy_auth=proxy_auth) as response:
-                        response.raise_for_status()
+                        await self.ensure_ok(response)
                         return await response.json()
             except (Exception, ClientResponseError) as e:
                 if attempt < retries - 1:
@@ -852,10 +853,12 @@ class EdelFinance:
     async def lucky_spin(self, account: str, address: str, is_free_spin: bool, use_proxy: bool, retries=5):
         url = f"{self.API_2}/lucky-spin/spin"
         data = json.dumps(self.generate_spin_payload(account, address, is_free_spin))
-        headers = {**self.HEADERS[address]}
-        headers["Authorization"] = f"Bearer {self.token[address]}"
-        headers["Content-Length"] = str(len(data))
-        headers["Content-Type"] = "application/json"
+        headers = {
+            **self.HEADERS_2[address],
+            "Authorization": f"Bearer {self.token[address]}",
+            "Content-Length": str(len(data)),
+            "Content-Type": "application/json"
+        }
         await asyncio.sleep(random.uniform(0.5, 1.0))
         for attempt in range(retries):
             proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
@@ -863,7 +866,7 @@ class EdelFinance:
             try:
                 async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
                     async with session.post(url=url, headers=headers, data=data, proxy=proxy, proxy_auth=proxy_auth) as response:
-                        response.raise_for_status()
+                        await self.ensure_ok(response)
                         return await response.json()
             except (Exception, ClientResponseError) as e:
                 if attempt < retries - 1:
@@ -1158,9 +1161,27 @@ class EdelFinance:
                             )
                             continue
 
-                        self.ca_id[address] = str(uuid.uuid4())
+                        user_agent = random.choice(USER_AGENTS)
 
-                        self.HEADERS[address] = {
+                        self.HEADERS_1[address] = {
+                            "Accept": "application/json",
+                            "Accept-Encoding": "gzip, deflate, br",
+                            "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                            "Cache-Control": "no-cache",
+                            "Origin": "https://testnet.edel.finance",
+                            "Pragma": "no-cache",
+                            "Privy-App-Id": "cmf5gt8yi019ljv0bn5k8xrdw",
+                            "Privy-Ca-Id": str(uuid.uuid4()),
+                            "Privy-Client": "react-auth:3.0.1",
+                            "Referer": "https://testnet.edel.finance/",
+                            "Sec-Fetch-Dest": "empty",
+                            "Sec-Fetch-Mode": "cors",
+                            "Sec-Fetch-Site": "cross-site",
+                            "Sec-Fetch-Storage-Access": "active",
+                            "User-Agent": user_agent
+                        }
+
+                        self.HEADERS_2[address] = {
                             "Accept": "*/*",
                             "Accept-Encoding": "gzip, deflate, br",
                             "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -1171,7 +1192,7 @@ class EdelFinance:
                             "Sec-Fetch-Dest": "empty",
                             "Sec-Fetch-Mode": "cors",
                             "Sec-Fetch-Site": "cross-site",
-                            "User-Agent": random.choice(USER_AGENTS)
+                            "User-Agent": user_agent
                         }
                         
                         await self.process_accounts(account, address, option, use_proxy, rotate_proxy)
