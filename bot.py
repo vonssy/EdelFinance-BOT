@@ -1,18 +1,13 @@
 from web3 import Web3
 from web3.exceptions import TransactionNotFound
-from aiohttp import (
-    ClientResponseError,
-    ClientSession,
-    ClientTimeout,
-    BasicAuth
-)
-from aiohttp_socks import ProxyConnector
+from curl_cffi import requests
+from http.cookies import SimpleCookie
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_utils import to_hex
 from datetime import datetime, timezone
 from colorama import *
-import asyncio, random, time, uuid, json, re, os, pytz
+import asyncio, random, time, uuid, json, os, pytz
 
 wib = pytz.timezone('Asia/Jakarta')
 
@@ -188,7 +183,7 @@ class EdelFinance:
         self.proxies = []
         self.proxy_index = 0
         self.account_proxies = {}
-        self.ca_id = {}
+        self.cookie_headers = {}
         self.token = {}
 
     def clear_terminal(self):
@@ -271,26 +266,6 @@ class EdelFinance:
         self.proxy_index = (self.proxy_index + 1) % len(self.proxies)
         return proxy
     
-    def build_proxy_config(self, proxy=None):
-        if not proxy:
-            return None, None, None
-
-        if proxy.startswith("socks"):
-            connector = ProxyConnector.from_url(proxy)
-            return connector, None, None
-
-        elif proxy.startswith("http"):
-            match = re.match(r"http://(.*?):(.*?)@(.*)", proxy)
-            if match:
-                username, password, host_port = match.groups()
-                clean_url = f"http://{host_port}"
-                auth = BasicAuth(username, password)
-                return None, clean_url, auth
-            else:
-                return None, proxy, None
-
-        raise Exception("Unsupported Proxy Type.")
-        
     def generate_address(self, account: str):
         try:
             account = Account.from_key(account)
@@ -768,19 +743,18 @@ class EdelFinance:
 
         return option, proxy_choice, rotate_proxy
     
-    async def ensure_ok(self, response):
+    def ensure_ok(self, response):
         if not response.ok:
-            raise Exception(f"HTTP {response.status}:{await response.text()}")
-    
+            raise Exception(f"HTTP {response.status_code}:{response.text}")
+
     async def check_connection(self, address: str, use_proxy: bool):
         proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
-        connector, proxy, proxy_auth = self.build_proxy_config(proxy_url)
+        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         try:
-            async with ClientSession(connector=connector, timeout=ClientTimeout(total=30)) as session:
-                async with session.get(url="https://api.ipify.org?format=json", proxy=proxy, proxy_auth=proxy_auth) as response:
-                    await self.ensure_ok(response)
-                    return True
-        except (Exception, ClientResponseError) as e:
+            response = await asyncio.to_thread(requests.get, url="https://api.ipify.org?format=json", proxies=proxies, timeout=30, impersonate="chrome120")
+            self.ensure_ok(response)
+            return True
+        except Exception as e:
             self.log(
                 f"{Fore.CYAN+Style.BRIGHT}Status:{Style.RESET_ALL}"
                 f"{Fore.RED+Style.BRIGHT} Connection Not 200 OK {Style.RESET_ALL}"
@@ -789,7 +763,7 @@ class EdelFinance:
             )
         
         return None
-    
+
     async def siwe_init(self, address: str, use_proxy: bool, retries=5):
         url = f"{self.API_1}/siwe/init"
         data = json.dumps({"address": address})
@@ -801,13 +775,19 @@ class EdelFinance:
         await asyncio.sleep(random.uniform(0.5, 1.0))
         for attempt in range(retries):
             proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
-            connector, proxy, proxy_auth = self.build_proxy_config(proxy_url)
+            proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
             try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.post(url=url, headers=headers, data=data, proxy=proxy, proxy_auth=proxy_auth) as response:
-                        await self.ensure_ok(response)
-                        return await response.json()
-            except (Exception, ClientResponseError) as e:
+                response = await asyncio.to_thread(requests.post, url=url, headers=headers, data=data, proxies=proxies, timeout=120, impersonate="chrome120")
+                self.ensure_ok(response)
+                raw_cookies = response.headers.get_list('Set-Cookie')
+                if raw_cookies:
+                    cookie = SimpleCookie()
+                    cookie.load("\n".join(raw_cookies))
+                    cookie_string = "; ".join([f"{key}={morsel.value}" for key, morsel in cookie.items()])
+                    self.cookie_headers[address] = cookie_string
+
+                return response.json()
+            except Exception as e:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
@@ -826,18 +806,18 @@ class EdelFinance:
         headers = {
             **self.HEADERS_1[address],
             "Content-Length": str(len(data)),
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Cookie": self.cookie_headers[address]
         }
         await asyncio.sleep(random.uniform(0.5, 1.0))
         for attempt in range(retries):
             proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
-            connector, proxy, proxy_auth = self.build_proxy_config(proxy_url)
+            proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
             try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.post(url=url, headers=headers, data=data, proxy=proxy, proxy_auth=proxy_auth) as response:
-                        await self.ensure_ok(response)
-                        return await response.json()
-            except (Exception, ClientResponseError) as e:
+                response = await asyncio.to_thread(requests.post, url=url, headers=headers, data=data, proxies=proxies, timeout=120, impersonate="chrome120")
+                self.ensure_ok(response)
+                return response.json()
+            except Exception as e:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
@@ -857,18 +837,18 @@ class EdelFinance:
             **self.HEADERS_2[address],
             "Authorization": f"Bearer {self.token[address]}",
             "Content-Length": str(len(data)),
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Cookie": self.cookie_headers[address]
         }
         await asyncio.sleep(random.uniform(0.5, 1.0))
         for attempt in range(retries):
             proxy_url = self.get_next_proxy_for_account(address) if use_proxy else None
-            connector, proxy, proxy_auth = self.build_proxy_config(proxy_url)
+            proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
             try:
-                async with ClientSession(connector=connector, timeout=ClientTimeout(total=60)) as session:
-                    async with session.post(url=url, headers=headers, data=data, proxy=proxy, proxy_auth=proxy_auth) as response:
-                        await self.ensure_ok(response)
-                        return await response.json()
-            except (Exception, ClientResponseError) as e:
+                response = await asyncio.to_thread(requests.post, url=url, headers=headers, data=data, proxies=proxies, timeout=120, impersonate="chrome120")
+                self.ensure_ok(response)
+                return response.json()
+            except Exception as e:
                 if attempt < retries - 1:
                     await asyncio.sleep(5)
                     continue
