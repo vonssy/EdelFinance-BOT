@@ -153,6 +153,15 @@ class EdelFinance:
                 "type": "function"
             },
             {
+                "inputs": [],
+                "name": "edelPrice",
+                "outputs": [
+                    { "internalType": "uint256", "name": "", "type": "uint256" }
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
                 "inputs": [
                     { "internalType": "enum IEdelFaucet.PaymentToken", "name": "paymentMethod", "type": "uint8" }, 
                     { "internalType": "address", "name": "referral", "type": "address" }
@@ -175,8 +184,6 @@ class EdelFinance:
                 "type": "function"
             }
         ]
-
-        self.PURCHASE_PRICE = 20
 
         self.HEADERS_1 = {}
         self.HEADERS_2 = {}
@@ -407,6 +414,28 @@ class EdelFinance:
             )
             return None
         
+    async def get_spin_price(self, address: str, use_proxy: bool):
+        try:
+            web3 = await self.get_web3_with_check(address, use_proxy)
+
+            spin_address = web3.to_checksum_address(self.SPIN_CONTRACT_ADDRESS)
+            token_contract = web3.eth.contract(address=spin_address, abi=self.CONTRACT_ABI)
+            spin_price = token_contract.functions.edelPrice().call()
+
+            price = web3.from_wei(spin_price, "ether")
+
+            return price
+        except Exception as e:
+            self.log(
+                f"{Fore.BLUE+Style.BRIGHT}   Status   :{Style.RESET_ALL}"
+                f"{Fore.RED+Style.BRIGHT} Failed to Fetch Spin Price {Style.RESET_ALL}"
+            )
+            self.log(
+                f"{Fore.BLUE+Style.BRIGHT}   Message  :{Style.RESET_ALL}"
+                f"{Fore.RED+Style.BRIGHT} {str(e)} {Style.RESET_ALL}"
+            )
+            return None
+        
     async def get_token_balance(self, address: str, token_address: str, use_proxy: bool):
         try:
             web3 = await self.get_web3_with_check(address, use_proxy)
@@ -511,7 +540,7 @@ class EdelFinance:
         except Exception as e:
             raise Exception(f"Approving Token Contract Failed: {str(e)}")
         
-    async def perform_buy_spin(self, account: str, address: str, use_proxy: bool):
+    async def perform_buy_spin(self, account: str, address: str, spin_price: int, use_proxy: bool):
         try:
             web3 = await self.get_web3_with_check(address, use_proxy)
 
@@ -519,10 +548,7 @@ class EdelFinance:
             spin_address = web3.to_checksum_address(self.SPIN_CONTRACT_ADDRESS)
             refer_address = web3.to_checksum_address(self.REFER_CONTRACT_ADDRESS)
 
-            token_contract = web3.eth.contract(address=edel_address, abi=self.CONTRACT_ABI)
-            decimals = token_contract.functions.decimals().call()
-
-            amount_to_wei = int(self.PURCHASE_PRICE * (10 ** decimals))
+            amount_to_wei = web3.to_wei(spin_price, "ether")
 
             await self.approving_token(account, address, edel_address, spin_address, amount_to_wei, use_proxy)
 
@@ -613,8 +639,8 @@ class EdelFinance:
             )
             return None
 
-    async def process_perform_buy_spin(self, account: str, address: str, use_proxy: bool):
-        onchain = await self.perform_buy_spin(account, address, use_proxy)
+    async def process_perform_buy_spin(self, account: str, address: str, spin_price: int, use_proxy: bool):
+        onchain = await self.perform_buy_spin(account, address, spin_price, use_proxy)
         if not onchain: return False
 
         block_number = onchain["block"]
@@ -977,9 +1003,11 @@ class EdelFinance:
                     )
                     return False
                 
+                spin_price = await self.get_spin_price(address, use_proxy)
+                if spin_price is None: return False
                 self.log(
                     f"{Fore.BLUE+Style.BRIGHT}   Price    :{Style.RESET_ALL}"
-                    f"{Fore.WHITE+Style.BRIGHT} {self.PURCHASE_PRICE} EDEL {Style.RESET_ALL}"
+                    f"{Fore.WHITE+Style.BRIGHT} {spin_price} EDEL {Style.RESET_ALL}"
                 )
                 
                 balance = await self.get_token_balance(address, self.TOKENS["EDEL"]["address"], use_proxy)
@@ -990,14 +1018,14 @@ class EdelFinance:
                     f"{Fore.WHITE+Style.BRIGHT} {balance} EDEL {Style.RESET_ALL}"
                 )
 
-                if balance < self.PURCHASE_PRICE:
+                if balance < spin_price:
                     self.log(
                         f"{Fore.BLUE+Style.BRIGHT}   Status   :{Style.RESET_ALL}"
                         f"{Fore.YELLOW+Style.BRIGHT} Insufficient EDEL Token Balance {Style.RESET_ALL}"
                     )
                     return False
 
-                onchain = await self.process_perform_buy_spin(account, address, use_proxy)
+                onchain = await self.process_perform_buy_spin(account, address, spin_price, use_proxy)
                 if not onchain: return False
 
                 paid_spins = 1
