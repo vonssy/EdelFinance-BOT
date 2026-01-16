@@ -176,7 +176,7 @@ class EdelFinance:
             }
         ]
 
-        self.PURCHASE_PRICE = 10
+        self.PURCHASE_PRICE = 20
 
         self.HEADERS_1 = {}
         self.HEADERS_2 = {}
